@@ -1,22 +1,20 @@
-// --- SenuzVid Backend Server ---
 const express = require("express");
 const cors = require("cors");
 const axios = require("axios");
 const ytdl = require("ytdl-core");
 
 const app = express();
-app.use(cors()); // Must be before routes
+app.use(cors()); // must be immediately after express init
 
-// Root health check
-app.get("/", (req, res) => res.send("OK"));
+// Root route
+app.get("/", (req, res) => res.send("SenuzVid Backend OK"));
 
 // Heroku safe port
-const port = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;
 
-// ---------------- PLATFORM DETECTOR ----------------
+// Platform detector
 function detectPlatform(url) {
   const u = url.toLowerCase();
-
   if (u.includes("youtube.com") || u.includes("youtu.be")) return "YouTube";
   if (u.includes("tiktok.com") || u.includes("vm.tiktok")) return "TikTok";
   if (u.includes("instagram.com") || u.includes("instagr")) return "Instagram";
@@ -27,28 +25,18 @@ function detectPlatform(url) {
     u.includes("fb.watch")
   ) return "Facebook";
   if (u.includes("twitter.com") || u.includes("x.com")) return "X";
-
   return "Unknown";
 }
 
-// TikTok video ID extractor
-function getTikTokId(url) {
-  const match = url.match(/\/video\/(\d+)/);
-  return match ? match[1] : null;
-}
-
-// ------------------------------------------------------
+// Health check
 app.get("/api/health", (req, res) => {
-  res.json({ status: "Server is Online 👍" });
+  res.json({ status: "Server Online 👍" });
 });
 
-// ------------------------------------------------------
-// FETCH VIDEO DETAILS
-// ------------------------------------------------------
+// Fetch video details
 app.get("/api/details", async (req, res) => {
   const url = req.query.url;
   if (!url) return res.status(400).json({ error: "Missing URL" });
-
   const platform = detectPlatform(url);
 
   try {
@@ -88,17 +76,13 @@ app.get("/api/details", async (req, res) => {
       });
     }
 
-    return res.json({
-      error: `${platform} not supported yet`
-    });
-  } catch (e) {
-    return res.status(500).json({ error: `${platform} fetch failed`, details: e.message });
+    return res.status(400).json({ error: `${platform} not supported` });
+  } catch (err) {
+    return res.status(500).json({ error: `${platform} fetch failed`, details: err.message });
   }
 });
 
-// ------------------------------------------------------
-// DOWNLOAD VIDEO
-// ------------------------------------------------------
+// Download video
 app.get("/api/download", async (req, res) => {
   const { url, quality } = req.query;
   if (!url) return res.status(400).json({ error: "URL missing" });
@@ -108,13 +92,11 @@ app.get("/api/download", async (req, res) => {
   try {
     if (platform === "YouTube") {
       const info = await ytdl.getInfo(url);
-
       if (quality === "audio") {
         const audio = ytdl(url, { filter: "audioonly", quality: "highestaudio" });
         res.header("Content-Disposition", `attachment; filename="${info.videoDetails.title}.mp3"`);
         return audio.pipe(res);
       }
-
       const video = ytdl(url, { filter: "audioandvideo", quality });
       res.header("Content-Disposition", `attachment; filename="${info.videoDetails.title}.mp4"`);
       return video.pipe(res);
@@ -139,12 +121,10 @@ app.get("/api/download", async (req, res) => {
     }
 
     return res.status(400).json({ error: `${platform} not supported` });
-  } catch (e) {
-    return res.status(500).json({ error: `${platform} download failed`, details: e.message });
+  } catch (err) {
+    return res.status(500).json({ error: `${platform} download failed`, details: err.message });
   }
 });
 
-// ------------------------------------------------------
-app.listen(port, () => {
-  console.log(`🚀 SenuzVid Backend Running on Port ${port}`);
-});
+// Start server
+app.listen(PORT, () => console.log(`🚀 SenuzVid Backend Running on Port ${PORT}`));
