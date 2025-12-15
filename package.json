@@ -1,19 +1,17 @@
 {
-  "name": "nodejs",
+  "name": "senuzvid-backend",
   "version": "1.0.0",
-  "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js"
   },
-  "keywords": [],
-  "author": "",
+  "engines": {
+    "node": "24.x"
+  },
   "dependencies": {
-    "@types/node": "^22.13.11",
-    "axios": "^1.13.2",
-    "cors": "^2.8.5",
     "express": "^5.1.0",
+    "cors": "^2.8.5",
+    "axios": "^1.13.2",
     "ytdl-core": "^4.11.5"
   }
 }
