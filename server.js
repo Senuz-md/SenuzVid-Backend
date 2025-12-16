@@ -1,37 +1,37 @@
-// server.js
-import express from "express";
-import cors from "cors";
-import axios from "axios";
-import ytdl from "ytdl-core";
+// server.js — SenuzVid Backend (Heroku Ready)
+
+const express = require("express");
+const cors = require("cors");
+const axios = require("axios");
+const ytdl = require("ytdl-core");
 
 const app = express();
-const port = process.env.PORT || 3000;
-
 app.use(cors());
 app.use(express.json());
 
-// ---------------- PLATFORM DETECTOR ----------------
+/* ================= HEALTH ================= */
+app.get("/api/health", (req, res) => {
+  res.json({ status: "Server is Online 👍" });
+});
+
+/* ================= PLATFORM DETECTOR ================= */
 function detectPlatform(url) {
   const u = url.toLowerCase();
+
   if (u.includes("youtube.com") || u.includes("youtu.be")) return "YouTube";
   if (u.includes("tiktok.com") || u.includes("vm.tiktok")) return "TikTok";
-  if (u.includes("instagram.com") || u.includes("instagr")) return "Instagram";
   if (
     u.includes("facebook.com") ||
     u.includes("m.facebook.com") ||
     u.includes("web.facebook.com") ||
     u.includes("fb.watch")
-  ) return "Facebook";
-  if (u.includes("twitter.com") || u.includes("x.com")) return "X";
+  )
+    return "Facebook";
+
   return "Unknown";
 }
 
-// ---------------- HEALTH CHECK ----------------
-app.get("/api/health", (req, res) => {
-  res.json({ status: "Server is Online 👍" });
-});
-
-// ---------------- VIDEO DETAILS ----------------
+/* ================= FETCH DETAILS ================= */
 app.get("/api/details", async (req, res) => {
   const url = req.query.url;
   if (!url) return res.status(400).json({ error: "Missing URL" });
@@ -39,53 +39,72 @@ app.get("/api/details", async (req, res) => {
   const platform = detectPlatform(url);
 
   try {
+    /* ---------- YOUTUBE ---------- */
     if (platform === "YouTube") {
       const info = await ytdl.getInfo(url);
+
+      const qualities = [
+        ...new Set(
+          info.formats
+            .filter(f => f.hasVideo && f.hasAudio && f.qualityLabel)
+            .map(f => f.qualityLabel)
+        ),
+        "audio"
+      ];
+
       return res.json({
         platform: "YouTube",
         title: info.videoDetails.title,
         author: info.videoDetails.author.name,
         thumbnail: info.videoDetails.thumbnails.pop().url,
-        qualities: ["360p", "480p", "720p", "audio"],
+        qualities
       });
     }
 
+    /* ---------- TIKTOK ---------- */
     if (platform === "TikTok") {
       const api = `https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`;
-      const response = await axios.get(api);
-      if (!response.data?.data) throw new Error("TikTok API failed");
+      const r = await axios.get(api);
 
-      const d = response.data.data;
+      if (!r.data || !r.data.data)
+        return res.status(500).json({ error: "TikTok fetch failed" });
+
+      const d = r.data.data;
+
       return res.json({
         platform: "TikTok",
         title: d.title,
-        author: d.author?.nickname || "Unknown",
+        author: d.author.nickname,
         thumbnail: d.cover,
-        qualities: ["720p", "360p", "audio"],
+        qualities: ["720p", "360p", "audio"]
       });
     }
 
+    /* ---------- FACEBOOK ---------- */
     if (platform === "Facebook") {
       const api = `https://api.exfly.dev/fbdl?url=${encodeURIComponent(url)}`;
-      const response = await axios.get(api);
-      if (!response.data?.title) throw new Error("FB fetch failed");
+      const r = await axios.get(api);
+
+      if (!r.data || !r.data.title)
+        return res.status(500).json({ error: "FB fetch failed" });
 
       return res.json({
         platform: "Facebook",
-        title: response.data.title,
-        author: response.data.author || "Facebook User",
-        thumbnail: response.data.thumbnail,
-        qualities: ["hd", "sd"],
+        title: r.data.title,
+        author: r.data.author || "Facebook User",
+        thumbnail: r.data.thumbnail,
+        qualities: ["1080p", "720p", "sd"]
       });
     }
 
-    return res.status(400).json({ error: `${platform} not supported` });
-  } catch (err) {
-    return res.status(500).json({ error: `${platform} details failed` });
+    return res.json({ error: "Platform not supported" });
+
+  } catch (e) {
+    return res.status(500).json({ error: "Details unavailable" });
   }
 });
 
-// ---------------- DOWNLOAD ----------------
+/* ================= DOWNLOAD ================= */
 app.get("/api/download", async (req, res) => {
   const { url, quality } = req.query;
   if (!url) return res.status(400).json({ error: "URL missing" });
@@ -93,50 +112,70 @@ app.get("/api/download", async (req, res) => {
   const platform = detectPlatform(url);
 
   try {
+    /* ---------- YOUTUBE ---------- */
     if (platform === "YouTube") {
       const info = await ytdl.getInfo(url);
-      const video =
-        quality === "audio"
-          ? ytdl(url, { filter: "audioonly", quality: "highestaudio" })
-          : ytdl(url, { filter: "audioandvideo", quality });
+
+      if (quality === "audio") {
+        res.header(
+          "Content-Disposition",
+          `attachment; filename="${info.videoDetails.title}.mp3"`
+        );
+        return ytdl(url, {
+          filter: "audioonly",
+          quality: "highestaudio"
+        }).pipe(res);
+      }
 
       res.header(
         "Content-Disposition",
-        `attachment; filename="${info.videoDetails.title}.${
-          quality === "audio" ? "mp3" : "mp4"
-        }"`
+        `attachment; filename="${info.videoDetails.title}.mp4"`
       );
-      return video.pipe(res);
+      return ytdl(url, {
+        filter: "audioandvideo",
+        quality
+      }).pipe(res);
     }
 
+    /* ---------- TIKTOK ---------- */
     if (platform === "TikTok") {
       const api = `https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`;
-      const response = await axios.get(api);
-      const videoUrl =
-        quality === "audio"
-          ? response.data.data.music
-          : response.data.data.play;
-      const video = await axios.get(videoUrl, { responseType: "stream" });
+      const r = await axios.get(api);
+
+      const fileUrl =
+        quality === "audio" ? r.data.data.music : r.data.data.play;
+
+      const stream = await axios.get(fileUrl, { responseType: "stream" });
+
       res.header("Content-Disposition", `attachment; filename="tiktok.mp4"`);
-      return video.data.pipe(res);
+      return stream.data.pipe(res);
     }
 
+    /* ---------- FACEBOOK ---------- */
     if (platform === "Facebook") {
       const api = `https://api.exfly.dev/fbdl?url=${encodeURIComponent(url)}`;
-      const response = await axios.get(api);
-      const link = quality === "hd" ? response.data.hd : response.data.sd;
-      const file = await axios.get(link, { responseType: "stream" });
-      res.header("Content-Disposition", `attachment; filename="fb_video.mp4"`);
-      return file.data.pipe(res);
+      const r = await axios.get(api);
+
+      const link =
+        quality === "1080p" || quality === "720p"
+          ? r.data.hd
+          : r.data.sd;
+
+      const stream = await axios.get(link, { responseType: "stream" });
+
+      res.header("Content-Disposition", `attachment; filename="facebook.mp4"`);
+      return stream.data.pipe(res);
     }
 
-    return res.status(400).json({ error: `${platform} not supported` });
-  } catch (err) {
-    return res.status(500).json({ error: `${platform} download failed` });
+    return res.status(400).json({ error: "Platform not supported" });
+
+  } catch (e) {
+    return res.status(500).json({ error: "Download failed" });
   }
 });
 
-// ---------------- LISTEN ----------------
-app.listen(port, () => {
-  console.log(`🚀 SenuzVid Backend Running on Port ${port}`);
+/* ================= START ================= */
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log("🚀 SenuzVid Backend Running on Port " + PORT);
 });
