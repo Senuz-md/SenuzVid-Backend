@@ -1,181 +1,94 @@
-// server.js — SenuzVid Backend (Heroku Ready)
-
 const express = require("express");
 const cors = require("cors");
 const axios = require("axios");
-const ytdl = require("ytdl-core");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* ================= HEALTH ================= */
-app.get("/api/health", (req, res) => {
-  res.json({ status: "Server is Online 👍" });
-});
+// ඔයා ලබාගත් API Key එක මෙතන තියෙනවා
+const RAPID_API_KEY = "a09a4b34e5msh6a2c5b0017e5204p14db85jsn8b4043a32df1";
+const RAPID_API_HOST = "social-media-video-downloader.p.rapidapi.com";
 
 /* ================= PLATFORM DETECTOR ================= */
 function detectPlatform(url) {
-  const u = url.toLowerCase();
-
-  if (u.includes("youtube.com") || u.includes("youtu.be")) return "YouTube";
-  if (u.includes("tiktok.com") || u.includes("vm.tiktok")) return "TikTok";
-  if (
-    u.includes("facebook.com") ||
-    u.includes("m.facebook.com") ||
-    u.includes("web.facebook.com") ||
-    u.includes("fb.watch")
-  )
-    return "Facebook";
-
-  return "Unknown";
+    const u = url.toLowerCase();
+    if (u.includes("youtube.com") || u.includes("youtu.be")) return "YouTube";
+    if (u.includes("tiktok.com")) return "TikTok";
+    if (u.includes("facebook.com") || u.includes("fb.watch") || u.includes("fb.com")) return "Facebook";
+    return "Unknown";
 }
 
 /* ================= FETCH DETAILS ================= */
 app.get("/api/details", async (req, res) => {
-  const url = req.query.url;
-  if (!url) return res.status(400).json({ error: "Missing URL" });
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ error: "URL එකක් ඇතුළත් කරන්න" });
 
-  const platform = detectPlatform(url);
+    const platform = detectPlatform(url);
 
-  try {
-    /* ---------- YOUTUBE ---------- */
-    if (platform === "YouTube") {
-      const info = await ytdl.getInfo(url);
+    try {
+        // RapidAPI වෙත Request එක යැවීම (මෙය සියලුම ප්ලැට්ෆෝම් සඳහා වැඩ කරයි)
+        const options = {
+            method: 'GET',
+            url: 'https://social-media-video-downloader.p.rapidapi.com/smvd/get/all',
+            params: { url: url },
+            headers: {
+                'x-rapidapi-key': RAPID_API_KEY,
+                'x-rapidapi-host': RAPID_API_HOST
+            }
+        };
 
-      const qualities = [
-        ...new Set(
-          info.formats
-            .filter(f => f.hasVideo && f.hasAudio && f.qualityLabel)
-            .map(f => f.qualityLabel)
-        ),
-        "audio"
-      ];
+        const response = await axios.request(options);
+        const data = response.data;
 
-      return res.json({
-        platform: "YouTube",
-        title: info.videoDetails.title,
-        author: info.videoDetails.author.name,
-        thumbnail: info.videoDetails.thumbnails.pop().url,
-        qualities
-      });
+        if (!data || !data.links) {
+            return res.status(404).json({ error: "වීඩියෝව සොයාගත නොහැක." });
+        }
+
+        // Frontend එකට අවශ්‍ය විදිහට දත්ත සකස් කිරීම
+        return res.json({
+            platform: platform,
+            title: data.title || "Social Media Video",
+            thumbnail: data.picture || data.cover,
+            author: data.author || platform,
+            qualities: data.links.map(l => l.quality) // ["720p", "360p", "audio" වගේ එයි]
+        });
+
+    } catch (e) {
+        console.error("API Error:", e.message);
+        return res.status(500).json({ error: "සර්වර් දෝෂයකි. පසුව උත්සාහ කරන්න." });
     }
-
-    /* ---------- TIKTOK ---------- */
-    if (platform === "TikTok") {
-      const api = `https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`;
-      const r = await axios.get(api);
-
-      if (!r.data || !r.data.data)
-        return res.status(500).json({ error: "TikTok fetch failed" });
-
-      const d = r.data.data;
-
-      return res.json({
-        platform: "TikTok",
-        title: d.title,
-        author: d.author.nickname,
-        thumbnail: d.cover,
-        qualities: ["720p", "360p", "audio"]
-      });
-    }
-
-    /* ---------- FACEBOOK ---------- */
-    if (platform === "Facebook") {
-      const api = `https://api.exfly.dev/fbdl?url=${encodeURIComponent(url)}`;
-      const r = await axios.get(api);
-
-      if (!r.data || !r.data.title)
-        return res.status(500).json({ error: "FB fetch failed" });
-
-      return res.json({
-        platform: "Facebook",
-        title: r.data.title,
-        author: r.data.author || "Facebook User",
-        thumbnail: r.data.thumbnail,
-        qualities: ["1080p", "720p", "sd"]
-      });
-    }
-
-    return res.json({ error: "Platform not supported" });
-
-  } catch (e) {
-    return res.status(500).json({ error: "Details unavailable" });
-  }
 });
 
 /* ================= DOWNLOAD ================= */
 app.get("/api/download", async (req, res) => {
-  const { url, quality } = req.query;
-  if (!url) return res.status(400).json({ error: "URL missing" });
+    const { url, quality } = req.query;
 
-  const platform = detectPlatform(url);
+    try {
+        const options = {
+            method: 'GET',
+            url: 'https://social-media-video-downloader.p.rapidapi.com/smvd/get/all',
+            params: { url: url },
+            headers: {
+                'x-rapidapi-key': RAPID_API_KEY,
+                'x-rapidapi-host': RAPID_API_HOST
+            }
+        };
 
-  try {
-    /* ---------- YOUTUBE ---------- */
-    if (platform === "YouTube") {
-      const info = await ytdl.getInfo(url);
+        const response = await axios.request(options);
+        
+        // පරිශීලකයා ඉල්ලපු quality එක තෝරාගැනීම
+        const selectedLink = response.data.links.find(l => l.quality === quality) || response.data.links[0];
 
-      if (quality === "audio") {
-        res.header(
-          "Content-Disposition",
-          `attachment; filename="${info.videoDetails.title}.mp3"`
-        );
-        return ytdl(url, {
-          filter: "audioonly",
-          quality: "highestaudio"
-        }).pipe(res);
-      }
+        if (!selectedLink) return res.status(404).send("Link not found");
 
-      res.header(
-        "Content-Disposition",
-        `attachment; filename="${info.videoDetails.title}.mp4"`
-      );
-      return ytdl(url, {
-        filter: "audioandvideo",
-        quality
-      }).pipe(res);
+        // කෙලින්ම වීඩියෝ ලින්ක් එකට redirect කිරීම (මෙය වේගවත් ක්‍රමයයි)
+        res.redirect(selectedLink.link);
+
+    } catch (e) {
+        res.status(500).send("බාගත කිරීමේ දෝෂයකි.");
     }
-
-    /* ---------- TIKTOK ---------- */
-    if (platform === "TikTok") {
-      const api = `https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`;
-      const r = await axios.get(api);
-
-      const fileUrl =
-        quality === "audio" ? r.data.data.music : r.data.data.play;
-
-      const stream = await axios.get(fileUrl, { responseType: "stream" });
-
-      res.header("Content-Disposition", `attachment; filename="tiktok.mp4"`);
-      return stream.data.pipe(res);
-    }
-
-    /* ---------- FACEBOOK ---------- */
-    if (platform === "Facebook") {
-      const api = `https://api.exfly.dev/fbdl?url=${encodeURIComponent(url)}`;
-      const r = await axios.get(api);
-
-      const link =
-        quality === "1080p" || quality === "720p"
-          ? r.data.hd
-          : r.data.sd;
-
-      const stream = await axios.get(link, { responseType: "stream" });
-
-      res.header("Content-Disposition", `attachment; filename="facebook.mp4"`);
-      return stream.data.pipe(res);
-    }
-
-    return res.status(400).json({ error: "Platform not supported" });
-
-  } catch (e) {
-    return res.status(500).json({ error: "Download failed" });
-  }
 });
 
-/* ================= START ================= */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("🚀 SenuzVid Backend Running on Port " + PORT);
-});
+app.listen(PORT, () => console.log(`🚀 SenuzVid Premium Backend Running on Port ${PORT}`));
