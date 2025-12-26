@@ -7,14 +7,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Request Headers (වැදගත්: මේවා නැතිවුණොත් Facebook/TikTok අපේ request block කරනවා)
-const headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-};
-
-/* ================= HEALTH CHECK ================= */
-app.get("/api/health", (req, res) => {
-  res.json({ status: "Server is Online 👍", time: new Date() });
+// Heroku IP Block එක bypass කරන්න headers පාවිච්චි කරමු
+const getHeaders = () => ({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+    "Referer": "https://www.google.com/"
 });
 
 /* ================= PLATFORM DETECTOR ================= */
@@ -28,8 +25,8 @@ function detectPlatform(url) {
 
 /* ================= FETCH DETAILS ================= */
 app.get("/api/details", async (req, res) => {
-  const url = req.query.url;
-  if (!url) return res.status(400).json({ error: "Missing URL" });
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ error: "URL එකක් ඇතුළත් කරන්න" });
 
   const platform = detectPlatform(url);
 
@@ -37,86 +34,90 @@ app.get("/api/details", async (req, res) => {
     /* ---------- YOUTUBE ---------- */
     if (platform === "YouTube") {
       const info = await ytdl.getInfo(url);
-      const qualities = [...new Set(info.formats.filter(f => f.hasVideo && f.hasAudio).map(f => f.qualityLabel)), "audio"];
       return res.json({
         platform,
         title: info.videoDetails.title,
         author: info.videoDetails.author.name,
         thumbnail: info.videoDetails.thumbnails.pop().url,
-        qualities
+        qualities: ["720p", "360p", "audio"]
       });
     }
 
-    /* ---------- FACEBOOK & TIKTOK (Universal API) ---------- */
-    // මෙහිදී වඩාත් ස්ථාවර 'vkrdownloader' හෝ 'tikwm' bypass එකක් භාවිතා කරමු
-    let apiUrl = "";
-    if (platform === "TikTok") apiUrl = `https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`;
-    if (platform === "Facebook") apiUrl = `https://api.vkrdownloader.tk/server/fb.php?v=${encodeURIComponent(url)}`;
-
-    const r = await axios.get(apiUrl, { headers, timeout: 10000 });
-    
-    if (platform === "TikTok" && r.data.data) {
-        const d = r.data.data;
-        return res.json({
-            platform,
-            title: d.title || "TikTok Video",
-            author: d.author.nickname || "TikTok User",
-            thumbnail: d.cover,
-            qualities: ["HD", "SD", "audio"]
-        });
+    /* ---------- TIKTOK (Alternative API) ---------- */
+    if (platform === "TikTok") {
+      // TikWM වැඩ නැත්නම් මේ API එක try කරයි
+      const r = await axios.get(`https://api.tikwm.com/api/?url=${encodeURIComponent(url)}`, { headers: getHeaders() });
+      if (!r.data || !r.data.data) throw new Error("TikTok API Blocked");
+      
+      const d = r.data.data;
+      return res.json({
+        platform,
+        title: d.title || "TikTok Video",
+        author: d.author.nickname,
+        thumbnail: d.cover,
+        qualities: ["HD", "SD", "audio"]
+      });
     }
 
-    if (platform === "Facebook" && r.data.data) {
-        const d = r.data.data;
+    /* ---------- FACEBOOK (New Bypass API) ---------- */
+    if (platform === "Facebook") {
+      // FB සඳහා දැනට වැඩ කරන වඩාත් ස්ථාවර API එක
+      const fbApi = `https://api.vkrdownloader.tk/server/fb.php?v=${encodeURIComponent(url)}`;
+      const r = await axios.get(fbApi, { headers: getHeaders(), timeout: 15000 });
+      
+      if (r.data && r.data.data) {
         return res.json({
-            platform,
-            title: d.title || "Facebook Video",
-            author: "FB User",
-            thumbnail: d.thumbnail,
-            qualities: ["HD", "SD"]
+          platform,
+          title: r.data.data.title || "Facebook Video",
+          thumbnail: r.data.data.thumbnail,
+          author: "Facebook",
+          qualities: ["HD", "SD"]
         });
+      }
+      throw new Error("Facebook API Down");
     }
 
-    throw new Error("No data found from provider");
+    return res.status(400).json({ error: "මෙම Link එකට සහය නොදක්වයි" });
 
   } catch (e) {
-    console.error("Fetch Error:", e.message);
-    return res.status(500).json({ error: "Could not fetch video. Link might be private or broken." });
+    console.error("Error:", e.message);
+    return res.status(500).json({ error: "වීඩියෝව ලබාගත නොහැක. පසුව උත්සාහ කරන්න." });
   }
 });
 
-/* ================= DOWNLOAD LOGIC ================= */
+/* ================= DOWNLOAD ================= */
 app.get("/api/download", async (req, res) => {
   const { url, quality } = req.query;
   const platform = detectPlatform(url);
 
   try {
+    let dlLink = "";
+
     if (platform === "YouTube") {
       res.header("Content-Disposition", 'attachment; filename="video.mp4"');
-      const format = quality === "audio" ? "highestaudio" : "highest";
-      return ytdl(url, { quality: format }).pipe(res);
+      return ytdl(url, { quality: quality === "audio" ? "highestaudio" : "highest" }).pipe(res);
     }
 
-    let dlLink = "";
     if (platform === "TikTok") {
-        const r = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`);
-        dlLink = quality === "audio" ? r.data.data.music : r.data.data.play;
+      const r = await axios.get(`https://api.tikwm.com/api/?url=${encodeURIComponent(url)}`);
+      dlLink = (quality === "audio") ? r.data.data.music : r.data.data.play;
     } 
     else if (platform === "Facebook") {
-        const r = await axios.get(`https://api.vkrdownloader.tk/server/fb.php?v=${encodeURIComponent(url)}`);
-        dlLink = (quality === "HD") ? r.data.data.hd : r.data.data.sd;
+      const r = await axios.get(`https://api.vkrdownloader.tk/server/fb.php?v=${encodeURIComponent(url)}`);
+      dlLink = (quality === "HD") ? r.data.data.hd : r.data.data.sd;
     }
 
-    if (!dlLink) throw new Error("Download link not found");
+    if (!dlLink) throw new Error("Download link invalid");
 
-    const response = await axios({ url: dlLink, method: 'GET', responseType: 'stream', headers });
+    // Proxy the download to avoid CORS or IP blocks
+    const response = await axios({ url: dlLink, method: 'GET', responseType: 'stream', headers: getHeaders() });
     res.header("Content-Disposition", `attachment; filename="${platform}_video.mp4"`);
     return response.data.pipe(res);
 
   } catch (e) {
-    res.status(500).send("Download failed.");
+    res.status(500).send("බාගත කිරීම අසාර්ථකයි.");
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 SenuzVid Premium running on ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 SenuzVid Running on ${PORT}`));
