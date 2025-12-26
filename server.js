@@ -7,21 +7,23 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// API Request Timeout (සමහර API පරක්කු වන නිසා)
-const TIMEOUT = 15000; 
+// Request Headers (වැදගත්: මේවා නැතිවුණොත් Facebook/TikTok අපේ request block කරනවා)
+const headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+};
 
 /* ================= HEALTH CHECK ================= */
 app.get("/api/health", (req, res) => {
-  res.json({ status: "SenuzVid Server is Online 🚀", plan: "Premium/Paid" });
+  res.json({ status: "Server is Online 👍", time: new Date() });
 });
 
 /* ================= PLATFORM DETECTOR ================= */
 function detectPlatform(url) {
-    const u = url.toLowerCase();
-    if (u.includes("youtube.com") || u.includes("youtu.be")) return "YouTube";
-    if (u.includes("tiktok.com")) return "TikTok";
-    if (u.includes("facebook.com") || u.includes("fb.watch") || u.includes("fb.com")) return "Facebook";
-    return "Unknown";
+  const u = url.toLowerCase();
+  if (u.includes("youtube.com") || u.includes("youtu.be")) return "YouTube";
+  if (u.includes("tiktok.com")) return "TikTok";
+  if (u.includes("facebook.com") || u.includes("fb.watch") || u.includes("fb.com")) return "Facebook";
+  return "Unknown";
 }
 
 /* ================= FETCH DETAILS ================= */
@@ -37,95 +39,84 @@ app.get("/api/details", async (req, res) => {
       const info = await ytdl.getInfo(url);
       const qualities = [...new Set(info.formats.filter(f => f.hasVideo && f.hasAudio).map(f => f.qualityLabel)), "audio"];
       return res.json({
-        platform: "YouTube",
+        platform,
         title: info.videoDetails.title,
-        thumbnail: info.videoDetails.thumbnails.pop().url,
         author: info.videoDetails.author.name,
+        thumbnail: info.videoDetails.thumbnails.pop().url,
         qualities
       });
     }
 
-    /* ---------- TIKTOK (TikWM Redirect Fix) ---------- */
-    if (platform === "TikTok") {
-      const r = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`, { timeout: TIMEOUT });
-      if (!r.data || !r.data.data) throw new Error("TikTok API error");
-      const d = r.data.data;
-      return res.json({
-        platform: "TikTok",
-        title: d.title || "TikTok Video",
-        thumbnail: d.cover,
-        author: d.author.nickname,
-        qualities: ["HD", "SD", "audio"]
-      });
+    /* ---------- FACEBOOK & TIKTOK (Universal API) ---------- */
+    // මෙහිදී වඩාත් ස්ථාවර 'vkrdownloader' හෝ 'tikwm' bypass එකක් භාවිතා කරමු
+    let apiUrl = "";
+    if (platform === "TikTok") apiUrl = `https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`;
+    if (platform === "Facebook") apiUrl = `https://api.vkrdownloader.tk/server/fb.php?v=${encodeURIComponent(url)}`;
+
+    const r = await axios.get(apiUrl, { headers, timeout: 10000 });
+    
+    if (platform === "TikTok" && r.data.data) {
+        const d = r.data.data;
+        return res.json({
+            platform,
+            title: d.title || "TikTok Video",
+            author: d.author.nickname || "TikTok User",
+            thumbnail: d.cover,
+            qualities: ["HD", "SD", "audio"]
+        });
     }
 
-    /* ---------- FACEBOOK (vkrdownloader logic) ---------- */
-    if (platform === "Facebook") {
-      const fbApi = `https://api.vkrdownloader.tk/server/fb.php?v=${encodeURIComponent(url)}`;
-      const r = await axios.get(fbApi, { timeout: TIMEOUT });
-      
-      if (!r.data || !r.data.data) {
-          // Alternative FB API fallback
-          return res.status(500).json({ error: "Facebook Details Unreachable" });
-      }
-
-      return res.json({
-        platform: "Facebook",
-        title: r.data.data.title || "Facebook Video",
-        thumbnail: r.data.data.thumbnail,
-        author: "Facebook User",
-        qualities: ["HD", "SD"]
-      });
+    if (platform === "Facebook" && r.data.data) {
+        const d = r.data.data;
+        return res.json({
+            platform,
+            title: d.title || "Facebook Video",
+            author: "FB User",
+            thumbnail: d.thumbnail,
+            qualities: ["HD", "SD"]
+        });
     }
 
-    return res.status(400).json({ error: "Platform not supported" });
+    throw new Error("No data found from provider");
+
   } catch (e) {
     console.error("Fetch Error:", e.message);
-    return res.status(500).json({ error: "Could not fetch details. Please try another link." });
+    return res.status(500).json({ error: "Could not fetch video. Link might be private or broken." });
   }
 });
 
 /* ================= DOWNLOAD LOGIC ================= */
 app.get("/api/download", async (req, res) => {
   const { url, quality } = req.query;
-  if (!url) return res.status(400).json({ error: "URL missing" });
-
   const platform = detectPlatform(url);
 
   try {
     if (platform === "YouTube") {
-      const info = await ytdl.getInfo(url);
-      const fileName = `${info.videoDetails.title.replace(/[^\w\s]/gi, '')}.mp4`;
-      res.header("Content-Disposition", `attachment; filename="${fileName}"`);
-      
-      if (quality === "audio") {
-        return ytdl(url, { filter: "audioonly", quality: "highestaudio" }).pipe(res);
-      }
-      return ytdl(url, { filter: "audioandvideo", quality: "highest" }).pipe(res);
+      res.header("Content-Disposition", 'attachment; filename="video.mp4"');
+      const format = quality === "audio" ? "highestaudio" : "highest";
+      return ytdl(url, { quality: format }).pipe(res);
     }
 
+    let dlLink = "";
     if (platform === "TikTok") {
-      const r = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`);
-      const dlLink = quality === "audio" ? r.data.data.music : r.data.data.play;
-      const response = await axios({ url: dlLink, method: 'GET', responseType: 'stream' });
-      res.header("Content-Disposition", `attachment; filename="tiktok_video.mp4"`);
-      return response.data.pipe(res);
+        const r = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`);
+        dlLink = quality === "audio" ? r.data.data.music : r.data.data.play;
+    } 
+    else if (platform === "Facebook") {
+        const r = await axios.get(`https://api.vkrdownloader.tk/server/fb.php?v=${encodeURIComponent(url)}`);
+        dlLink = (quality === "HD") ? r.data.data.hd : r.data.data.sd;
     }
 
-    if (platform === "Facebook") {
-      const fbApi = `https://api.vkrdownloader.tk/server/fb.php?v=${encodeURIComponent(url)}`;
-      const r = await axios.get(fbApi);
-      const dlLink = quality === "HD" ? r.data.data.hd : r.data.data.sd;
-      const response = await axios({ url: dlLink, method: 'GET', responseType: 'stream' });
-      res.header("Content-Disposition", `attachment; filename="facebook_video.mp4"`);
-      return response.data.pipe(res);
-    }
+    if (!dlLink) throw new Error("Download link not found");
+
+    const response = await axios({ url: dlLink, method: 'GET', responseType: 'stream', headers });
+    res.header("Content-Disposition", `attachment; filename="${platform}_video.mp4"`);
+    return response.data.pipe(res);
 
   } catch (e) {
-    console.error("Download Error:", e.message);
-    return res.status(500).send("Download failed. The video link might be expired.");
+    res.status(500).send("Download failed.");
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Premium Server Running on Port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 SenuzVid Premium running on ${PORT}`));
