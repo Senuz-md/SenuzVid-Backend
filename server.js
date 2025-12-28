@@ -1,4 +1,4 @@
-// server.js — SenuzVid Ultimate Backend (Fixed YouTube & TikTok Qualities)
+// server.js — SenuzVid PRO (Stability Optimized for Heroku)
 
 const express = require("express");
 const cors = require("cors");
@@ -8,6 +8,11 @@ const ytdl = require("@distube/ytdl-core");
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// සර්වර් එක වැඩ දැයි පරීක්ෂා කිරීමට (Root route)
+app.get("/", (req, res) => {
+  res.send("SenuzVid Engine is Online 🚀");
+});
 
 /* ================= PLATFORM DETECTOR ================= */
 function detectPlatform(url) {
@@ -21,7 +26,7 @@ function detectPlatform(url) {
 
 /* ================= FETCH DETAILS ================= */
 app.get("/api/details", async (req, res) => {
-  const url = req.query.url;
+  const { url } = req.query;
   if (!url) return res.status(400).json({ error: "URL missing" });
 
   const platform = detectPlatform(url);
@@ -46,7 +51,7 @@ app.get("/api/details", async (req, res) => {
         title: info.videoDetails.title,
         author: info.videoDetails.author.name,
         thumbnail: info.videoDetails.thumbnails.pop().url,
-        qualities: ["1080p", "720p", "480p", "audio"]
+        qualities: ["1080p", "720p", "audio"]
       });
     }
 
@@ -59,21 +64,23 @@ app.get("/api/details", async (req, res) => {
         title: d.title || `${platform} Video`,
         author: platform,
         thumbnail: d.thumbnail || d.cover,
-        qualities: ["1080p", "720p", "sd", "audio"]
+        qualities: ["1080p", "720p", "audio"]
       });
     }
 
     return res.status(400).json({ error: "Platform not supported" });
 
   } catch (e) {
-    return res.status(500).json({ error: "Details unavailable. YouTube/API might be rate-limited." });
+    console.error("Details Error:", e.message);
+    return res.status(500).json({ error: "ලින්ක් එක පරීක්ෂා කිරීමේදී ගැටලුවක් මතු විය." });
   }
 });
 
-/* ================= DOWNLOAD LOGIC (FIXED) ================= */
+/* ================= DOWNLOAD (QUALITY FIXED) ================= */
 app.get("/api/download", async (req, res) => {
   const { url, quality } = req.query;
   const platform = detectPlatform(url);
+  const q = quality ? quality.toLowerCase() : "";
 
   if (!url) return res.status(400).send("URL missing");
 
@@ -82,49 +89,40 @@ app.get("/api/download", async (req, res) => {
     if (platform === "TikTok") {
       const r = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`);
       const d = r.data.data;
-      const q = quality ? quality.toLowerCase() : "";
-
       if (q === "audio") return res.redirect(d.music);
-      
-      // TikTok Qualities: 'hd' labels ලැබුණොත් hdplay ලබා දෙයි
-      const dlLink = (["4k", "1080p", "hd"].includes(q)) ? (d.hdplay || d.play) : d.play;
+      const dlLink = (["4k", "2k", "1080p"].includes(q)) ? (d.hdplay || d.play) : d.play;
       return res.redirect(dlLink);
     }
 
-    /* ---------- YOUTUBE (Using @distube/ytdl-core) ---------- */
+    /* ---------- YOUTUBE ---------- */
     if (platform === "YouTube") {
       const info = await ytdl.getInfo(url);
       let format;
-
-      if (quality === "audio") {
+      if (q === "audio") {
         format = ytdl.chooseFormat(info.formats, { quality: 'highestaudio' });
       } else {
-        // වීඩියෝ සහ ඕඩියෝ දෙකම සහිත හොඳම format එක තෝරාගනී
-        format = ytdl.chooseFormat(info.formats, { quality: 'highest', filter: 'audioandvideo' });
+        // Progressive formats (Video + Audio combined) are best for basic servers
+        format = ytdl.chooseFormat(info.formats, { filter: 'audioandvideo', quality: 'highest' });
       }
-
-      if (format && format.url) {
-        return res.redirect(format.url);
-      } else {
-        return res.status(404).send("YouTube format not found.");
-      }
+      return res.redirect(format.url);
     }
 
-    /* ---------- FACEBOOK & INSTAGRAM ---------- */
+    /* ---------- FB & IG ---------- */
     if (platform === "Facebook" || platform === "Instagram") {
       const r = await axios.get(`https://api.vkrdownloader.tk/server/wrapper.php?url=${encodeURIComponent(url)}`);
       const downloads = r.data.data.downloads;
-      const q = quality ? quality.toLowerCase() : "1080";
-      
       const dlLink = downloads.find(d => d.quality.toLowerCase().includes(q))?.url || downloads[0].url;
       return res.redirect(dlLink);
     }
 
   } catch (e) {
     console.error("Download Error:", e.message);
-    return res.status(500).send("සර්වර් එකේ ගැටලුවක්. කරුණාකර නැවත උත්සාහ කරන්න.");
+    return res.status(500).send("ඩවුන්ලෝඩ් ලින්ක් එක සකස් කිරීමට නොහැකි විය.");
   }
 });
 
+/* ================= SERVER START ================= */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 SenuzVid Engine Live on Port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 SenuzVid Engine Running on Port ${PORT}`);
+});
