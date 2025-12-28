@@ -1,4 +1,4 @@
-// server.js — SenuzVid Backend (Enhanced Quality Edition)
+// server.js — SenuzVid Final Backend (Quality Fixed)
 
 const express = require("express");
 const cors = require("cors");
@@ -27,7 +27,7 @@ app.get("/api/details", async (req, res) => {
   const platform = detectPlatform(url);
 
   try {
-    /* ---------- TIKTOK (Stable) ---------- */
+    /* ---------- TIKTOK ---------- */
     if (platform === "TikTok") {
       const r = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`);
       const d = r.data.data;
@@ -36,23 +36,7 @@ app.get("/api/details", async (req, res) => {
         title: d.title || "TikTok Video",
         author: d.author.nickname,
         thumbnail: d.cover,
-        qualities: ["4K Ultra HD", "1080p FHD", "720p HD", "360p", "audio"]
-      });
-    }
-
-    /* ---------- FACEBOOK & INSTAGRAM (Universal) ---------- */
-    if (platform === "Facebook" || platform === "Instagram") {
-      // මෙහිදී අපි vkrdownloader හි bypass endpoint එක භාවිතා කරනවා
-      const api = `https://api.vkrdownloader.tk/server/wrapper.php?url=${encodeURIComponent(url)}`;
-      const r = await axios.get(api);
-      const d = r.data.data;
-
-      return res.json({
-        platform,
-        title: d.title || `${platform} Video`,
-        author: platform,
-        thumbnail: d.thumbnail || d.cover,
-        qualities: ["4K", "2K", "1080p", "720p", "sd", "audio"]
+        qualities: ["4k", "2k", "1080p", "720p", "480p", "360p", "audio"]
       });
     }
 
@@ -69,41 +53,88 @@ app.get("/api/details", async (req, res) => {
       });
     }
 
+    /* ---------- FB & IG ---------- */
+    if (platform === "Facebook" || platform === "Instagram") {
+      const api = `https://api.vkrdownloader.tk/server/wrapper.php?url=${encodeURIComponent(url)}`;
+      const r = await axios.get(api);
+      const d = r.data.data;
+      return res.json({
+        platform,
+        title: d.title || `${platform} Video`,
+        author: platform,
+        thumbnail: d.thumbnail || d.cover,
+        qualities: ["1080p", "720p", "sd", "audio"]
+      });
+    }
+
     return res.status(400).json({ error: "Platform not supported" });
 
   } catch (e) {
-    return res.status(500).json({ error: "Details unavailable at the moment" });
+    return res.status(500).json({ error: "Server Error: Details unavailable" });
   }
 });
 
-/* ================= DOWNLOAD ================= */
+/* ================= DOWNLOAD (QUALITY FIXED) ================= */
 app.get("/api/download", async (req, res) => {
   const { url, quality } = req.query;
   const platform = detectPlatform(url);
 
+  if (!url) return res.status(400).send("URL missing");
+
   try {
+    /* ---------- TIKTOK LOGIC ---------- */
     if (platform === "TikTok") {
       const r = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`);
-      const dlLink = (quality === "audio") ? r.data.data.music : r.data.data.play;
+      const d = r.data.data;
+
+      let dlLink;
+      const q = quality ? quality.toLowerCase() : "";
+
+      if (q === "audio") {
+        dlLink = d.music;
+      } 
+      // ඔයාගේ සයිට් එකේ තියෙන 4k, 2k, 1080p සඳහා HD Link එක ලබාදීම
+      else if (["4k", "2k", "1080p", "hd"].includes(q)) {
+        dlLink = d.hdplay || d.play; 
+      } 
+      // අනෙක් (720p, 480p, 360p) සඳහා සාමාන්‍ය Link එක ලබාදීම
+      else {
+        dlLink = d.play;
+      }
       return res.redirect(dlLink);
     }
 
+    /* ---------- YOUTUBE LOGIC ---------- */
+    if (platform === "YouTube") {
+      const itagMap = { "1080p": 137, "720p": 22, "480p": 135, "360p": 18 };
+      const selectedTag = itagMap[quality] || (quality === "audio" ? "highestaudio" : "highest");
+      
+      res.header("Content-Disposition", 'attachment; filename="video.mp4"');
+      return ytdl(url, { quality: selectedTag }).pipe(res);
+    }
+
+    /* ---------- FB & IG LOGIC ---------- */
     if (platform === "Facebook" || platform === "Instagram") {
       const r = await axios.get(`https://api.vkrdownloader.tk/server/wrapper.php?url=${encodeURIComponent(url)}`);
-      // User තෝරාගන්නා quality එක අනුව link එක ලබාදීම
-      const dlLink = r.data.data.downloads.find(d => d.quality.includes(quality))?.url || r.data.data.downloads[0].url;
+      const downloads = r.data.data.downloads;
+      const q = quality ? quality.toLowerCase() : "720p";
+      
+      const dlLink = downloads.find(d => d.quality.toLowerCase().includes(q))?.url || downloads[0].url;
       return res.redirect(dlLink);
-    }
-
-    if (platform === "YouTube") {
-      res.header("Content-Disposition", 'attachment; filename="video.mp4"');
-      return ytdl(url, { quality: quality === "audio" ? "highestaudio" : "highest" }).pipe(res);
     }
 
   } catch (e) {
-    return res.status(500).send("Download failed. Link expired.");
+    console.error(e);
+    return res.status(500).send("Download Link Generation Failed.");
   }
 });
 
+/* ================= SERVER START ================= */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 SenuzVid running on ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`
+  🚀 SenuzVid Backend Running
+  📡 Port: ${PORT}
+  🔗 Platform Support: TikTok, YouTube, FB, IG
+  `);
+});
